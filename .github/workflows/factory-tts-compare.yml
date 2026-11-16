@@ -1,0 +1,71 @@
+name: FACTORY - Compare ArboTTS Voices
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "input/tts-comparison.txt"
+      - ".github/workflows/factory-tts-compare.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-voices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout FACTORY
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Checkout ArboTTS
+        uses: actions/checkout@v4
+        with:
+          repository: ARBO-TEAM/arboTTS
+          path: arboTTS
+
+      - name: Install ArboTTS
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./arboTTS
+
+      - name: Generate Danu and Dimas samples
+        run: |
+          mkdir -p output/voice-comparison
+          python - <<'PY'
+          from pathlib import Path
+          import soundfile as sf
+          from arbotts import ArboTTS
+
+          text = Path("input/tts-comparison.txt").read_text(encoding="utf-8").strip()
+          if not text:
+              raise SystemExit("Teks perbandingan kosong.")
+
+          engine = ArboTTS(tier="standard")
+          for speaker in ("danu", "dimas"):
+              output = Path(f"output/voice-comparison/{speaker}.wav")
+              duration = engine.speak(
+                  text=text,
+                  output_file=output,
+                  lang="id",
+                  speaker=speaker,
+                  speed=1.0,
+              )
+              info = sf.info(str(output))
+              if info.frames <= 0:
+                  raise SystemExit(f"Audio {speaker} kosong.")
+              print(f"{speaker}: {duration:.2f} detik, {info.samplerate} Hz, {info.frames} frames")
+          Path("output/voice-comparison/test-text.txt").write_text(text, encoding="utf-8")
+          PY
+
+      - name: Upload voice comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-arbotts-voice-comparison
+          path: output/voice-comparison/
+          retention-days: 3
