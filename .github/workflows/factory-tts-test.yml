@@ -1,0 +1,78 @@
+name: FACTORY - Test Indonesian TTS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "input/script.json"
+      - ".github/workflows/factory-tts-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  generate-voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Piper TTS
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install piper-tts==1.8.0
+
+      - name: Download Indonesian test voice
+        run: |
+          mkdir -p models output
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx" \
+            -o models/id_ID-news_tts-medium.onnx
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx.json" \
+            -o models/id_ID-news_tts-medium.onnx.json
+
+      - name: Generate Indonesian narration sample
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("input/script.json").read_text(encoding="utf-8"))
+          text = data["script"].strip()
+          if not text:
+              raise SystemExit("Naskah kosong.")
+
+          Path("output/narration.txt").write_text(text, encoding="utf-8")
+          PY
+          piper \
+            --model models/id_ID-news_tts-medium.onnx \
+            --config models/id_ID-news_tts-medium.onnx.json \
+            --input_file output/narration.txt \
+            --output_file output/narration.wav
+
+      - name: Check generated audio
+        run: |
+          test -s output/narration.wav
+          python - <<'PY'
+          import wave
+          with wave.open("output/narration.wav", "rb") as audio:
+              print("FACTORY TTS: audio berhasil dibuat.")
+              print(f"Durasi: {audio.getnframes() / audio.getframerate():.2f} detik")
+              print(f"Sample rate: {audio.getframerate()} Hz")
+          PY
+
+      - name: Upload test narration
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-indonesian-tts-test
+          path: |
+            output/narration.wav
+            output/narration.txt
+          retention-days: 3
