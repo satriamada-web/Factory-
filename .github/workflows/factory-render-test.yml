@@ -1,0 +1,90 @@
+name: FACTORY - Test Video Rendering
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "input/script.json"
+      - ".github/workflows/factory-render-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  render-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Piper TTS
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install piper-tts==1.8.0
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -n 2
+
+      - name: Download Indonesian test voice
+        run: |
+          mkdir -p models output
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx" \
+            -o models/id_ID-news_tts-medium.onnx
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx.json" \
+            -o models/id_ID-news_tts-medium.onnx.json
+
+      - name: Generate narration
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("input/script.json").read_text(encoding="utf-8"))
+          title = data["title"].strip()
+          script = data["script"].strip()
+          if not title or not script:
+              raise SystemExit("Judul dan naskah wajib diisi.")
+          Path("output/title.txt").write_text(title, encoding="utf-8")
+          Path("output/narration.txt").write_text(script, encoding="utf-8")
+          PY
+          piper \
+            --model models/id_ID-news_tts-medium.onnx \
+            --config models/id_ID-news_tts-medium.onnx.json \
+            --input_file output/narration.txt \
+            --output_file output/narration.wav
+
+      - name: Render MP4 with placeholder background
+        run: |
+          TITLE="$(cat output/title.txt)"
+          ffmpeg -y \
+            -f lavfi -i "color=c=0x101820:s=1920x1080:r=25" \
+            -i output/narration.wav \
+            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='FACTORY':fontcolor=0x8CC8FF:fontsize=44:x=(w-text_w)/2:y=h*0.34,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=output/title.txt:fontcolor=white:fontsize=52:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing=18:box=1:boxcolor=black@0.25:boxborderw=28" \
+            -c:v libx264 -preset veryfast -tune stillimage -pix_fmt yuv420p \
+            -c:a aac -b:a 192k -shortest -movflags +faststart \
+            output/factory-render-test.mp4
+
+      - name: Verify MP4 output
+        run: |
+          test -s output/factory-render-test.mp4
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 output/factory-render-test.mp4
+
+      - name: Upload rendered test video
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-render-test
+          path: |
+            output/factory-render-test.mp4
+            output/narration.wav
+          retention-days: 3
