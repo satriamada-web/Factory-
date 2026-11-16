@@ -34,14 +34,19 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           p = Path("arboTTS/arbotts/__init__.py")
-          source = p.read_text(encoding="utf-8")
-          source = source.replace(
-              "from arbotts.clone import AutoClone, StudioClone, rewrite_indonesian_phonetics\\n",
-              ""
-          )
-          source = source.replace('    "AutoClone",\\n', "")
-          source = source.replace('    "StudioClone",\\n', "")
-          source = source.replace('    "rewrite_indonesian_phonetics",\\n', "")
+          lines = p.read_text(encoding="utf-8").splitlines()
+          blocked = {
+              "from arbotts.clone import AutoClone, StudioClone, rewrite_indonesian_phonetics",
+              '"AutoClone",',
+              '"StudioClone",',
+              '"rewrite_indonesian_phonetics",',
+          }
+          cleaned = []
+          for line in lines:
+              if line.strip() in blocked:
+                  continue
+              cleaned.append(line)
+          source = "\n".join(cleaned) + "\n"
           p.write_text(source, encoding="utf-8")
           if "from arbotts.clone import" in source:
               raise SystemExit("Patch import clone belum berhasil.")
