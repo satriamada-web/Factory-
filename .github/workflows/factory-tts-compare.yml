@@ -36,12 +36,12 @@ jobs:
           p = Path("arboTTS/arbotts/__init__.py")
           source = p.read_text(encoding="utf-8")
           source = source.replace(
-              "from arbotts.clone import AutoClone, StudioClone, rewrite_indonesian_phonetics\n",
+              "from arbotts.clone import AutoClone, StudioClone, rewrite_indonesian_phonetics\\n",
               ""
           )
-          source = source.replace('    "AutoClone",\n', "")
-          source = source.replace('    "StudioClone",\n', "")
-          source = source.replace('    "rewrite_indonesian_phonetics",\n', "")
+          source = source.replace('    "AutoClone",\\n', "")
+          source = source.replace('    "StudioClone",\\n', "")
+          source = source.replace('    "rewrite_indonesian_phonetics",\\n', "")
           p.write_text(source, encoding="utf-8")
           if "from arbotts.clone import" in source:
               raise SystemExit("Patch import clone belum berhasil.")
@@ -53,9 +53,29 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ./arboTTS
 
-      - name: Generate Danu and Dimas samples
+      - name: Generate clean raw Ardi baseline
         run: |
           mkdir -p output/voice-comparison
+          python - <<'PY'
+          import asyncio
+          from pathlib import Path
+          import edge_tts
+
+          text = Path("input/tts-comparison.txt").read_text(encoding="utf-8").strip()
+          async def main():
+              communicate = edge_tts.Communicate(
+                  text,
+                  "id-ID-ArdiNeural",
+                  rate="-5%",
+              )
+              await communicate.save("output/voice-comparison/ardi-raw.mp3")
+          asyncio.run(main())
+          PY
+          ffmpeg -y -i output/voice-comparison/ardi-raw.mp3 -vn -ac 1 -ar 24000 -c:a pcm_s16le output/voice-comparison/ardi-raw.wav
+          rm output/voice-comparison/ardi-raw.mp3
+
+      - name: Generate Danu and Dimas processed samples
+        run: |
           python - <<'PY'
           from pathlib import Path
           import soundfile as sf
