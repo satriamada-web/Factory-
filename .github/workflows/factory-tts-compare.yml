@@ -58,6 +58,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ./arboTTS
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+
       - name: Generate clean raw Ardi baseline
         run: |
           mkdir -p output/voice-comparison
