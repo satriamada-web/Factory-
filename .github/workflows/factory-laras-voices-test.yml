@@ -1,0 +1,120 @@
+name: FACTORY - Compare Four Indonesian Laras Voices
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "input/tts-comparison.txt"
+      - ".github/workflows/factory-laras-voices-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-voices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout FACTORY
+        uses: actions/checkout@v4
+
+      - name: Checkout Laras TTS
+        uses: actions/checkout@v4
+        with:
+          repository: Urdemonlord/laras-tts
+          path: laras-tts
+
+      - name: Download and verify Indonesian model
+        run: |
+          chmod +x laras-tts/scripts/unduh-model.sh
+          laras-tts/scripts/unduh-model.sh --dir "$PWD/data/models" --ref-dir "$PWD/data/ref"
+
+      - name: Download three additional CC0 Indonesian voice references
+        run: |
+          set -euo pipefail
+          base="https://huggingface.co/anak10thn/pocket-tts-indonesian/resolve/main/voices"
+          for id in 20954552 20954811 22918082; do
+            file="common_voice_id_${id}.mp3"
+            curl -fL --retry 3 --retry-delay 2 "$base/$file" -o "data/ref/$file"
+            test -s "data/ref/$file"
+          done
+          ls -lh data/ref/
+
+      - name: Start Laras container
+        run: |
+          docker pull ghcr.io/urdemonlord/laras-tts:0.2.1
+          docker run -d --name factory-laras-voices             --memory=3g --memory-swap=3g             -p 8080:8080             -v "$PWD/data:/data"             -e MODELS_DIR=/data/models             -e REF_WAV=/data/ref/common_voice_id_19961910.mp3             -e CACHE_DIR=/data/cache             -e LARAS_LANG=id             -e TAKES=1             -e USE_ASR=0             -e CHUNK=1             -e MAX_CONCURRENT=1             ghcr.io/urdemonlord/laras-tts:0.2.1
+
+      - name: Wait for Laras health check
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/health > output-health.json; then
+              cat output-health.json
+              exit 0
+            fi
+            echo "Menunggu Laras siap ($attempt/60)..."
+            sleep 5
+          done
+          docker logs factory-laras-voices
+          exit 1
+
+      - name: Generate the same narration with four reference voices
+        run: |
+          set -euo pipefail
+          mkdir -p output/laras-voice-comparison
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          text = Path("input/tts-comparison.txt").read_text(encoding="utf-8").strip()
+          if not text:
+              raise SystemExit("Teks uji kosong.")
+          voices = [
+              "common_voice_id_19961910.mp3",
+              "common_voice_id_20954552.mp3",
+              "common_voice_id_20954811.mp3",
+              "common_voice_id_22918082.mp3",
+          ]
+          for name in voices:
+              request = {"text": text, "voice": f"/data/ref/{name}", "takes": 1}
+              Path("request.json").write_text(
+                  json.dumps(request, ensure_ascii=False), encoding="utf-8"
+              )
+              target = Path("output/laras-voice-comparison") / name.replace(".mp3", ".wav")
+              import subprocess
+              subprocess.run([
+                  "curl", "--fail", "--show-error", "--silent",
+                  "--retry", "3", "--retry-delay", "3", "--max-time", "300",
+                  "-X", "POST", "http://127.0.0.1:8080/tts",
+                  "-H", "content-type: application/json",
+                  "--data-binary", "@request.json",
+                  "-o", str(target)
+              ], check=True)
+              if not target.exists() or target.stat().st_size == 0:
+                  raise SystemExit(f"Audio kosong: {target}")
+              print(f"Berhasil: {target} ({target.stat().st_size} bytes)")
+          PY
+          cp input/tts-comparison.txt output/laras-voice-comparison/test-text.txt
+          cat > output/laras-voice-comparison/README.txt <<'EOF'
+          FACTORY - Laras TTS Indonesian voice comparison
+          Engine: Laras TTS 0.2.1
+          Model weights: anak10thn/pocket-tts-indonesian, CC-BY-4.0
+          Model attribution: https://huggingface.co/anak10thn/pocket-tts-indonesian
+          Voice references: four Indonesian Common Voice 22.0 clips supplied with the model repository.
+          Voice reference dataset license: CC0, as documented by the model repository.
+          The four clips are four different speakers. Their gender is not documented here;
+          listen to the generated WAVs and choose by sound, not by filename.
+          This is a technical comparison, not a claim that any voice matches the Siti sample.
+          EOF
+          docker logs factory-laras-voices > output/laras-voice-comparison/server.log 2>&1
+          ls -lh output/laras-voice-comparison/
+
+      - name: Stop Laras container
+        if: always()
+        run: docker logs factory-laras-voices || true
+
+      - name: Upload voice comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-laras-four-voice-comparison
+          path: output/laras-voice-comparison/
+          retention-days: 3
