@@ -1,0 +1,96 @@
+name: FACTORY - Test Licensed Visuals
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "input/script.json"
+      - "input/scenes.json"
+      - "scripts/fetch_commons.py"
+      - ".github/workflows/factory-visual-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  render-visual-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Piper TTS and FFmpeg
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install piper-tts==1.8.0
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Download Indonesian test voice
+        run: |
+          mkdir -p models output
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx" \
+            -o models/id_ID-news_tts-medium.onnx
+          curl -L --fail --retry 3 \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx.json" \
+            -o models/id_ID-news_tts-medium.onnx.json
+
+      - name: Generate narration
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("input/script.json").read_text(encoding="utf-8"))
+          title = data["title"].strip()
+          script = data["script"].strip()
+          if not title or not script:
+              raise SystemExit("Judul dan naskah wajib diisi.")
+          Path("output/title.txt").write_text(title, encoding="utf-8")
+          Path("output/narration.txt").write_text(script, encoding="utf-8")
+          PY
+          piper \
+            --model models/id_ID-news_tts-medium.onnx \
+            --config models/id_ID-news_tts-medium.onnx.json \
+            --input_file output/narration.txt \
+            --output_file output/narration.wav
+
+      - name: Fetch Creative Commons visuals from Wikimedia Commons
+        run: python scripts/fetch_commons.py
+
+      - name: Render video with downloaded visual
+        run: |
+          IMAGE="$(find output/visuals -type f -name '*.jpg' | sort | head -n 1)"
+          test -n "$IMAGE"
+          ffmpeg -y \
+            -loop 1 -framerate 25 -i "$IMAGE" \
+            -i output/narration.wav \
+            -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,drawbox=x=0:y=ih*0.68:w=iw:h=ih*0.32:color=black@0.55:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='FACTORY':fontcolor=0x8CC8FF:fontsize=38:x=80:y=h*0.73,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=output/title.txt:fontcolor=white:fontsize=48:x=80:y=h*0.80:line_spacing=14" \
+            -c:v libx264 -preset veryfast -tune stillimage -pix_fmt yuv420p \
+            -c:a aac -b:a 192k -shortest -movflags +faststart \
+            output/factory-visual-test.mp4
+
+      - name: Verify video and attribution
+        run: |
+          test -s output/factory-visual-test.mp4
+          test -s output/attribution.txt
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 output/factory-visual-test.mp4
+          echo "Visual attribution:"
+          cat output/attribution.txt
+
+      - name: Upload visual test result
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-visual-test
+          path: |
+            output/factory-visual-test.mp4
+            output/narration.wav
+            output/attribution.txt
+            output/visuals/
+          retention-days: 3
