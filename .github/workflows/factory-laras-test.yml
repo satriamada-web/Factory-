@@ -1,0 +1,107 @@
+name: FACTORY - Test Laras Indonesian TTS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "input/tts-comparison.txt"
+      - ".github/workflows/factory-laras-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  laras-tts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FACTORY
+        uses: actions/checkout@v4
+
+      - name: Checkout Laras TTS
+        uses: actions/checkout@v4
+        with:
+          repository: Urdemonlord/laras-tts
+          path: laras-tts
+
+      - name: Download and verify Indonesian model
+        run: |
+          chmod +x laras-tts/scripts/unduh-model.sh
+          laras-tts/scripts/unduh-model.sh --dir "$PWD/data/models" --ref-dir "$PWD/data/ref"
+
+      - name: Start Laras container
+        run: |
+          docker pull ghcr.io/urdemonlord/laras-tts:0.2.1
+          docker run -d --name factory-laras-test \
+            --memory=3g --memory-swap=3g \
+            -p 8080:8080 \
+            -v "$PWD/data:/data" \
+            -e MODELS_DIR=/data/models \
+            -e REF_WAV=/data/ref/common_voice_id_19961910.mp3 \
+            -e CACHE_DIR=/data/cache \
+            -e LARAS_LANG=id \
+            -e TAKES=1 \
+            -e USE_ASR=0 \
+            -e CHUNK=1 \
+            -e MAX_CONCURRENT=1 \
+            ghcr.io/urdemonlord/laras-tts:0.2.1
+
+      - name: Wait for Laras health check
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/health > output-health.json; then
+              cat output-health.json
+              exit 0
+            fi
+            echo "Menunggu Laras siap ($attempt/60)..."
+            sleep 5
+          done
+          docker logs factory-laras-test
+          exit 1
+
+      - name: Generate Indonesian test narration
+        run: |
+          mkdir -p output/laras-test
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          text = Path("input/tts-comparison.txt").read_text(encoding="utf-8").strip()
+          if not text:
+              raise SystemExit("Teks uji kosong.")
+          Path("request.json").write_text(
+              json.dumps({"text": text, "takes": 1}, ensure_ascii=False),
+              encoding="utf-8"
+          )
+          PY
+          curl --fail --show-error --silent \
+            --retry 3 --retry-delay 3 --max-time 300 \
+            -X POST http://127.0.0.1:8080/tts \
+            -H "content-type: application/json" \
+            --data-binary @request.json \
+            -D output/laras-test/response-headers.txt \
+            -o output/laras-test/laras-indonesian.wav
+          test -s output/laras-test/laras-indonesian.wav
+          docker exec factory-laras-test ffmpeg -version | head -n 1
+          docker logs factory-laras-test > output/laras-test/laras-server.log 2>&1
+          cp input/tts-comparison.txt output/laras-test/test-text.txt
+          cat > output/laras-test/REFERENCE.txt <<'EOF'
+          Engine: Laras TTS 0.2.1
+          Voice reference used for this first technical test: Common Voice 22.0 Indonesian sample, CC0 (public domain).
+          This is NOT yet the user's uploaded Cartesia Siti reference.
+          Model weights: pocket-tts-indonesian by anak10thn, CC-BY-4.0.
+          Attribution: https://huggingface.co/anak10thn/pocket-tts-indonesian
+          Code: MIT OR Apache-2.0.
+          EOF
+          ls -lh output/laras-test/laras-indonesian.wav
+          cat output/laras-test/response-headers.txt
+
+      - name: Stop Laras container
+        if: always()
+        run: docker logs factory-laras-test || true
+
+      - name: Upload Laras TTS test
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-laras-tts-test
+          path: output/laras-test/
+          retention-days: 3
