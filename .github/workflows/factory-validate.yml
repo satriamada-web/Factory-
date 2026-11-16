@@ -1,0 +1,58 @@
+name: FACTORY - Validate Script
+
+on:
+  push:
+    paths:
+      - "input/script.json"
+      - ".github/workflows/factory-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate script file
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("input/script.json")
+          if not path.exists():
+              raise SystemExit("ERROR: input/script.json tidak ditemukan.")
+
+          try:
+              data = json.loads(path.read_text(encoding="utf-8"))
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"ERROR: JSON tidak valid: {exc}")
+
+          title = data.get("title")
+          script = data.get("script")
+
+          if not isinstance(title, str) or not title.strip():
+              raise SystemExit("ERROR: field 'title' wajib berupa teks dan tidak boleh kosong.")
+          if not isinstance(script, str) or not script.strip():
+              raise SystemExit("ERROR: field 'script' wajib berupa teks dan tidak boleh kosong.")
+
+          print("FACTORY: naskah lolos validasi.")
+          print(f"Judul: {title}")
+          print(f"Jumlah karakter naskah: {len(script)}")
+          PY
+
+      - name: Prepare validated input
+        run: |
+          mkdir -p output
+          cp input/script.json output/script.json
+
+      - name: Upload validated script artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-validated-script
+          path: output/script.json
+          retention-days: 3
